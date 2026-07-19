@@ -1,0 +1,776 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Flashcard Forge</title>
+<style>
+  :root {
+    --accent: #e8683f;
+    --accent-2: #6c7bff;
+    --ink: #23213a;
+    --card-front: #f7f4ec;
+    --card-back: #1e2140;
+    --muted: #8a8ca8;
+    --line: rgba(255,255,255,0.09);
+    --panel: rgba(255,255,255,0.045);
+    --panel-2: rgba(255,255,255,0.07);
+    --unsure: #e8683f;
+    --nearly: #e2b23c;
+    --learned: #4bbf8a;
+  }
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  html, body { height: 100%; }
+  body {
+    font-family: ui-sans-serif, system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+    color: #eceafd;
+    background:
+      radial-gradient(1200px 600px at 85% -10%, rgba(108,123,255,0.16), transparent 60%),
+      radial-gradient(900px 500px at 0% 110%, rgba(232,104,63,0.14), transparent 55%),
+      linear-gradient(160deg, #1a1b3a, #0f1020);
+    background-attachment: fixed;
+    min-height: 100%;
+  }
+  a { color: var(--accent-2); }
+
+  /* ---------- Nav ---------- */
+  nav {
+    position: sticky; top: 0; z-index: 20;
+    display: flex; align-items: center; gap: 6px;
+    padding: 12px 18px;
+    background: rgba(15,16,32,0.72);
+    backdrop-filter: blur(12px);
+    border-bottom: 1px solid var(--line);
+    flex-wrap: wrap;
+  }
+  .brand {
+    font-family: Georgia, serif; font-size: 20px; font-weight: 600;
+    margin-right: auto; letter-spacing: -0.3px;
+  }
+  .brand em { color: var(--accent); font-style: italic; }
+  .navbtn {
+    background: none; border: 1px solid transparent; color: var(--muted);
+    padding: 8px 14px; border-radius: 10px; font-size: 14px; cursor: pointer;
+    transition: color .15s, background .15s;
+  }
+  .navbtn:hover { color: #eceafd; background: var(--panel); }
+  .navbtn.active { color: #eceafd; background: var(--panel-2); border-color: var(--line); }
+  .navbtn:disabled { opacity: .35; cursor: default; }
+  .keypill {
+    font-size: 12px; padding: 5px 10px; border-radius: 20px; margin-left: 4px;
+    border: 1px solid var(--line);
+  }
+  .keypill.ok { color: var(--learned); }
+  .keypill.no { color: var(--accent); }
+
+  /* ---------- Layout ---------- */
+  main { max-width: 860px; margin: 0 auto; padding: 30px 20px 80px; }
+  .view { display: none; animation: fade .25s ease; }
+  .view.active { display: block; }
+  @keyframes fade { from { opacity: 0; transform: translateY(6px); } to { opacity: 1; transform: none; } }
+
+  h1 { font-family: Georgia, serif; font-size: clamp(28px, 5vw, 40px); font-weight: 600; letter-spacing: -0.5px; }
+  h1 em { color: var(--accent); font-style: italic; }
+  h2 { font-family: Georgia, serif; font-size: 22px; font-weight: 600; margin-bottom: 4px; }
+  .tagline { color: var(--muted); margin-top: 6px; font-size: 15px; }
+  .section-gap { margin-top: 28px; }
+
+  .panel { background: var(--panel); border: 1px solid var(--line); border-radius: 18px; padding: 18px; }
+
+  label { font-size: 12px; text-transform: uppercase; letter-spacing: 0.08em; color: var(--muted); display: block; margin-bottom: 6px; }
+  input, select, textarea {
+    width: 100%; padding: 12px 14px; background: rgba(0,0,0,0.25);
+    border: 1px solid var(--line); border-radius: 12px; color: #eceafd; font-size: 15px;
+    outline: none; transition: border-color .15s, box-shadow .15s; font-family: inherit;
+  }
+  input:focus, select:focus, textarea:focus { border-color: var(--accent-2); box-shadow: 0 0 0 3px rgba(108,123,255,0.2); }
+  input::placeholder { color: #5c5e7d; }
+  select option { color: #111; }
+  .row { display: flex; gap: 10px; flex-wrap: wrap; align-items: flex-end; }
+  .field { flex: 1 1 200px; }
+
+  .btn {
+    padding: 12px 20px; border: none; border-radius: 12px; font-size: 15px; font-weight: 700;
+    cursor: pointer; white-space: nowrap; transition: transform .1s, filter .15s; font-family: inherit;
+  }
+  .btn:active { transform: translateY(1px); }
+  .btn.primary { background: linear-gradient(135deg, var(--accent), #ff8a5c); color: #2a1206; }
+  .btn.primary:hover { filter: brightness(1.06); }
+  .btn.ghost { background: var(--panel-2); color: #eceafd; border: 1px solid var(--line); }
+  .btn.ghost:hover { background: rgba(255,255,255,0.12); }
+  .btn:disabled { opacity: .5; cursor: default; filter: grayscale(.3); }
+  .btn.sm { padding: 8px 13px; font-size: 13px; font-weight: 600; }
+
+  /* ---------- Stat tiles ---------- */
+  .tiles { display: grid; grid-template-columns: repeat(auto-fit, minmax(130px, 1fr)); gap: 12px; }
+  .tile { background: var(--panel); border: 1px solid var(--line); border-radius: 16px; padding: 16px; }
+  .tile .num { font-size: 30px; font-weight: 700; font-variant-numeric: tabular-nums; }
+  .tile .lbl { color: var(--muted); font-size: 13px; margin-top: 2px; }
+  .tile.unsure .num { color: var(--unsure); }
+  .tile.nearly .num { color: var(--nearly); }
+  .tile.learned .num { color: var(--learned); }
+
+  .empty { text-align: center; color: var(--muted); padding: 40px 20px; }
+  .empty .big { font-size: 40px; margin-bottom: 10px; }
+
+  .banner {
+    background: rgba(232,104,63,0.12); border: 1px solid rgba(232,104,63,0.35);
+    color: #ffcbb8; padding: 12px 16px; border-radius: 12px; font-size: 14px; margin-bottom: 16px;
+  }
+  .banner a { color: #ffd9c9; text-decoration: underline; cursor: pointer; }
+
+  /* ---------- Category / cards ---------- */
+  .cat { background: var(--panel); border: 1px solid var(--line); border-radius: 16px; margin-bottom: 12px; overflow: hidden; }
+  .cat-head { display: flex; align-items: center; gap: 12px; padding: 15px 16px; cursor: pointer; }
+  .cat-head:hover { background: var(--panel-2); }
+  .cat-name { font-weight: 600; font-size: 17px; }
+  .cat-meta { color: var(--muted); font-size: 13px; }
+  .cat-spacer { margin-left: auto; display: flex; align-items: center; gap: 10px; }
+  .chev { transition: transform .2s; color: var(--muted); }
+  .cat.open .chev { transform: rotate(90deg); }
+  .cat-body { display: none; padding: 4px 16px 16px; }
+  .cat.open .cat-body { display: block; }
+
+  .pile-bar { display: inline-flex; height: 7px; width: 90px; border-radius: 4px; overflow: hidden; background: rgba(255,255,255,0.08); }
+  .pile-bar span { display: block; height: 100%; }
+
+  .topic-head { color: var(--accent-2); font-size: 12px; text-transform: uppercase; letter-spacing: 0.08em; margin: 14px 0 8px; font-weight: 700; }
+
+  .qcard { background: rgba(0,0,0,0.22); border: 1px solid var(--line); border-radius: 12px; padding: 12px 14px; margin-bottom: 8px; }
+  .qcard .q { font-weight: 600; cursor: pointer; }
+  .qcard .q::before { content: "Q "; color: var(--accent); font-weight: 700; }
+  .qcard .a { color: #cfcde6; font-size: 14px; margin-top: 8px; padding-top: 8px; border-top: 1px dashed var(--line); display: none; }
+  .qcard .a::before { content: "A "; color: var(--accent-2); font-weight: 700; }
+  .qcard.open .a { display: block; }
+  .qcard .foot { display: flex; align-items: center; gap: 6px; margin-top: 10px; flex-wrap: wrap; }
+
+  .seg { display: inline-flex; border: 1px solid var(--line); border-radius: 9px; overflow: hidden; }
+  .seg button { background: none; border: none; color: var(--muted); padding: 5px 11px; font-size: 12px; cursor: pointer; font-family: inherit; }
+  .seg button:hover { background: var(--panel-2); color: #eceafd; }
+  .seg button.on[data-status="unsure"]  { background: var(--unsure);  color: #2a1206; font-weight: 700; }
+  .seg button.on[data-status="nearly"]  { background: var(--nearly);  color: #2a2206; font-weight: 700; }
+  .seg button.on[data-status="learned"] { background: var(--learned); color: #06251a; font-weight: 700; }
+  .del { margin-left: auto; background: none; border: none; color: #6b6d8c; cursor: pointer; font-size: 13px; }
+  .del:hover { color: #ff8f7a; }
+
+  /* ---------- Flip card (revision) ---------- */
+  .scene { perspective: 1400px; margin-top: 10px; }
+  .flip { position: relative; width: 100%; height: 320px; cursor: pointer; transform-style: preserve-3d; transition: transform .55s cubic-bezier(.2,.7,.2,1); }
+  .flip.flipped { transform: rotateY(180deg); }
+  .face { position: absolute; inset: 0; backface-visibility: hidden; border-radius: 22px; padding: 32px; display: flex; flex-direction: column; justify-content: center; box-shadow: 0 24px 50px -20px rgba(0,0,0,0.6); }
+  .face.front { background: linear-gradient(180deg,#fbf9f3,var(--card-front)); color: var(--ink); }
+  .face.back { background: linear-gradient(180deg,#262a52,var(--card-back)); color:#eceafd; transform: rotateY(180deg); border:1px solid rgba(108,123,255,0.25); }
+  .face .kicker { font-size: 11px; text-transform: uppercase; letter-spacing: .14em; font-weight: 700; margin-bottom: 12px; }
+  .face.front .kicker { color: var(--accent); }
+  .face.back .kicker { color: var(--accent-2); }
+  .face .txt { font-size: clamp(18px, 3.2vw, 22px); line-height: 1.45; overflow-y: auto; }
+  .face.front .txt { font-weight: 600; }
+  .flip-hint { position: absolute; bottom: 14px; right: 20px; font-size: 11px; opacity: .5; }
+
+  .grade { display: flex; gap: 10px; margin-top: 16px; }
+  .grade button { flex: 1; padding: 14px; border: none; border-radius: 12px; font-weight: 700; cursor: pointer; font-family: inherit; font-size: 14px; }
+  .grade .g-unsure  { background: var(--unsure);  color: #2a1206; }
+  .grade .g-nearly  { background: var(--nearly);  color: #2a2206; }
+  .grade .g-learned { background: var(--learned); color: #06251a; }
+  .grade button:active { transform: translateY(1px); }
+  .quiz-top { display: flex; align-items: center; justify-content: space-between; margin-bottom: 8px; color: var(--muted); font-size: 14px; }
+
+  /* ---------- Modal ---------- */
+  .overlay { position: fixed; inset: 0; background: rgba(8,8,18,0.6); backdrop-filter: blur(3px); display: none; align-items: center; justify-content: center; z-index: 40; padding: 20px; }
+  .overlay.show { display: flex; }
+  .modal { background: #1a1b34; border: 1px solid var(--line); border-radius: 18px; padding: 22px; width: 100%; max-width: 420px; }
+  .modal h3 { font-family: Georgia, serif; font-size: 20px; margin-bottom: 14px; }
+  .modal .row { margin-bottom: 12px; }
+
+  /* ---------- Loading + toast ---------- */
+  #loading { position: fixed; inset: 0; background: rgba(8,8,18,0.55); backdrop-filter: blur(2px); display: none; align-items: center; justify-content: center; z-index: 50; }
+  #loading.show { display: flex; }
+  .loadbox { background: #1a1b34; border: 1px solid var(--line); border-radius: 16px; padding: 22px 28px; display: flex; align-items: center; gap: 14px; font-size: 15px; }
+  .spinner { width: 20px; height: 20px; border: 3px solid rgba(255,255,255,0.2); border-top-color: var(--accent); border-radius: 50%; animation: spin .7s linear infinite; }
+  @keyframes spin { to { transform: rotate(360deg); } }
+
+  #toast { position: fixed; left: 50%; bottom: 26px; transform: translateX(-50%) translateY(30px); z-index: 60; opacity: 0; transition: opacity .25s, transform .25s; max-width: 90%; }
+  #toast.show { opacity: 1; transform: translateX(-50%) translateY(0); }
+  .toastbox { padding: 13px 18px; border-radius: 12px; font-size: 14px; border: 1px solid var(--line); background: #22243f; box-shadow: 0 12px 30px -10px rgba(0,0,0,0.6); }
+  .toastbox.success { border-color: rgba(75,191,138,0.5); color: #b8f0d6; }
+  .toastbox.error { border-color: rgba(255,143,122,0.5); color: #ffcbb8; }
+
+  footer { text-align: center; color: #4c4e6b; font-size: 12px; margin-top: 40px; }
+</style>
+</head>
+<body>
+
+<nav>
+  <span class="brand">Flashcard <em>Forge</em></span>
+  <button class="navbtn" data-view="home">Home</button>
+  <button class="navbtn" data-view="bank">Bank</button>
+  <button class="navbtn" data-view="revise" id="nav-revise">Revise</button>
+  <button class="navbtn" data-view="settings">Settings</button>
+  <span class="keypill" id="keypill"></span>
+</nav>
+
+<main>
+  <!-- ===================== HOME ===================== -->
+  <section class="view" id="view-home">
+    <h1>Make <em>flashcards</em> from anything.</h1>
+    <p class="tagline">Type a topic, get cards, bank them, and revise with spaced repetition.</p>
+
+    <div id="homeKeyBanner"></div>
+
+    <div class="panel section-gap">
+      <div class="row">
+        <div class="field" style="flex: 2 1 280px;">
+          <label for="topic">Topic</label>
+          <input id="topic" type="text" placeholder="e.g. Robert Nozick, Photosynthesis, React hooks…" autocomplete="off">
+        </div>
+        <div class="field" style="flex: 0 1 110px;">
+          <label for="count">Cards</label>
+          <select id="count">
+            <option>3</option><option selected>5</option><option>8</option><option>10</option>
+          </select>
+        </div>
+        <div class="field" style="flex: 0 1 160px;">
+          <label for="model">Model</label>
+          <select id="model">
+            <option value="claude-opus-4-8">Opus 4.8 · best</option>
+            <option value="claude-sonnet-5">Sonnet 5 · balanced</option>
+            <option value="claude-haiku-4-5">Haiku 4.5 · fast</option>
+          </select>
+        </div>
+        <div class="field" style="flex: 0 0 auto;">
+          <button class="btn primary" id="genBtn">Generate ✨</button>
+        </div>
+      </div>
+      <p class="tagline" style="margin-top:10px; font-size:13px;">New topics are auto-sorted into a category. Cards start in the <b style="color:var(--unsure)">Unsure</b> pile.</p>
+    </div>
+
+    <div class="tiles section-gap" id="homeStats"></div>
+
+    <div class="row section-gap" style="justify-content:center;">
+      <button class="btn ghost" data-view="bank">📚 Browse bank</button>
+      <button class="btn ghost" data-view="revise">🎯 Start revision</button>
+    </div>
+  </section>
+
+  <!-- ===================== BANK ===================== -->
+  <section class="view" id="view-bank">
+    <div class="row" style="align-items:center;">
+      <div style="margin-right:auto;"><h2>Your bank</h2><p class="tagline" id="bankSummary"></p></div>
+      <div class="field" style="flex:0 1 190px;">
+        <label for="sort">Sort categories</label>
+        <select id="sort">
+          <option value="alpha">Topic A–Z</option>
+          <option value="count">Most cards</option>
+          <option value="recent">Recently added</option>
+        </select>
+      </div>
+    </div>
+    <div id="bankList" class="section-gap"></div>
+  </section>
+
+  <!-- ===================== REVISE ===================== -->
+  <section class="view" id="view-revise">
+    <div id="reviseSetup">
+      <h2>Revision quiz</h2>
+      <p class="tagline">Cards are weighted by pile — <b style="color:var(--unsure)">Unsure</b> appears most, <b style="color:var(--learned)">Learned</b> least (3 : 2 : 1). Grade each card to move it between piles.</p>
+      <div class="panel section-gap">
+        <div class="row">
+          <div class="field">
+            <label for="scope">What to revise</label>
+            <select id="scope"></select>
+          </div>
+          <div class="field" style="flex:0 0 auto;">
+            <button class="btn primary" id="startBtn">Start session ▶</button>
+          </div>
+        </div>
+        <div id="scopeInfo" class="tagline" style="margin-top:10px;"></div>
+      </div>
+    </div>
+
+    <div id="quizArea" style="display:none;">
+      <div class="quiz-top">
+        <span id="quizProgress"></span>
+        <button class="btn ghost sm" id="endBtn">End session</button>
+      </div>
+      <div class="scene">
+        <div class="flip" id="quizCard">
+          <div class="face front">
+            <div class="kicker" id="quizCat">Question</div>
+            <div class="txt" id="quizFront"></div>
+            <div class="flip-hint">click / space to reveal</div>
+          </div>
+          <div class="face back">
+            <div class="kicker">Answer</div>
+            <div class="txt" id="quizBack"></div>
+          </div>
+        </div>
+      </div>
+      <div class="grade" id="gradeRow" style="display:none;">
+        <button class="g-unsure"  data-g="unsure">Unsure</button>
+        <button class="g-nearly"  data-g="nearly">Nearly there</button>
+        <button class="g-learned" data-g="learned">Learned</button>
+      </div>
+      <p class="tagline" id="revealHint" style="text-align:center; margin-top:14px;">Reveal the answer, then grade how well you knew it.</p>
+    </div>
+
+    <div id="quizDone" style="display:none;" class="empty">
+      <div class="big">🎉</div>
+      <h2>Session complete</h2>
+      <p class="tagline" id="doneSummary"></p>
+      <div class="row" style="justify-content:center; margin-top:18px;">
+        <button class="btn primary" id="againBtn">Revise again</button>
+        <button class="btn ghost" data-view="bank">See bank</button>
+      </div>
+    </div>
+  </section>
+
+  <!-- ===================== SETTINGS ===================== -->
+  <section class="view" id="view-settings">
+    <h2>Settings</h2>
+    <div class="panel section-gap">
+      <label for="apiKey">Anthropic API key</label>
+      <div class="row">
+        <div class="field"><input id="apiKey" type="password" placeholder="sk-ant-…" autocomplete="off"></div>
+        <button class="btn ghost sm" id="revealKey" type="button">Show</button>
+        <button class="btn primary sm" id="saveKey" type="button">Save</button>
+      </div>
+      <p class="tagline" style="margin-top:10px; font-size:13px;">
+        Stored only in this browser and sent directly to Anthropic. Get a key at
+        <a href="https://console.anthropic.com/settings/keys" target="_blank" rel="noopener">console.anthropic.com</a>.
+      </p>
+    </div>
+
+    <div class="panel section-gap">
+      <label for="defModel">Default model</label>
+      <select id="defModel">
+        <option value="claude-opus-4-8">Opus 4.8 · best quality</option>
+        <option value="claude-sonnet-5">Sonnet 5 · balanced</option>
+        <option value="claude-haiku-4-5">Haiku 4.5 · fast &amp; cheap</option>
+      </select>
+    </div>
+
+    <div class="panel section-gap">
+      <label>Your data</label>
+      <div class="row">
+        <button class="btn ghost sm" id="exportBtn">⬇ Export bank (JSON)</button>
+        <button class="btn ghost sm" id="importBtn">⬆ Import</button>
+        <input type="file" id="importFile" accept="application/json" style="display:none;">
+        <button class="btn ghost sm" id="clearBtn" style="color:#ff8f7a;">🗑 Clear all cards</button>
+      </div>
+    </div>
+  </section>
+
+  <footer>Cards are AI-generated — double-check anything you rely on.</footer>
+</main>
+
+<!-- Add-cards modal -->
+<div class="overlay" id="addOverlay">
+  <div class="modal">
+    <h3 id="addTitle">Add cards</h3>
+    <div class="row"><div class="field"><label for="addTopic">Topic</label><input id="addTopic" type="text" autocomplete="off"></div></div>
+    <div class="row"><div class="field"><label for="addCount">How many</label>
+      <select id="addCount"><option>3</option><option selected>5</option><option>8</option><option>10</option></select>
+    </div></div>
+    <div class="row" style="justify-content:flex-end; margin-top:6px;">
+      <button class="btn ghost sm" id="addCancel">Cancel</button>
+      <button class="btn primary sm" id="addGo">Generate</button>
+    </div>
+  </div>
+</div>
+
+<div id="loading"><div class="loadbox"><div class="spinner"></div><span id="loadText">Working…</span></div></div>
+<div id="toast"><div class="toastbox" id="toastBox"></div></div>
+
+<script>
+/* ============ storage & state ============ */
+const LS_BANK = 'ff_bank_v1', LS_KEY = 'ff_key', LS_MODEL = 'ff_model';
+const $ = id => document.getElementById(id);
+const PILES = {
+  unsure:  { label:'Unsure',       weight:3, color:'var(--unsure)' },
+  nearly:  { label:'Nearly there', weight:2, color:'var(--nearly)' },
+  learned: { label:'Learned',      weight:1, color:'var(--learned)' },
+};
+let bank = loadBank();
+let currentView = 'home';
+let addCtx = null; // { category }
+let session = null;
+let scopeOptions = []; // revision scope lookup: [{ label, cards, group, whole }]
+
+function loadBank() { try { return JSON.parse(localStorage.getItem(LS_BANK)) || { cards: [] }; } catch { return { cards: [] }; } }
+function saveBank() { localStorage.setItem(LS_BANK, JSON.stringify(bank)); }
+function getKey() { return (localStorage.getItem(LS_KEY) || '').trim(); }
+function getModel() { return localStorage.getItem(LS_MODEL) || 'claude-opus-4-8'; }
+function uid() { return 'c' + Date.now().toString(36) + Math.random().toString(36).slice(2, 7); }
+function esc(s) { return String(s).replace(/[&<>"']/g, m => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[m])); }
+function cardById(id) { return bank.cards.find(c => c.id === id); }
+function categories() {
+  const seen = []; bank.cards.forEach(c => { if (!seen.includes(c.category)) seen.push(c.category); }); return seen;
+}
+function catCards(cat) { return bank.cards.filter(c => c.category === cat); }
+function pileCounts(cards) {
+  const p = { unsure:0, nearly:0, learned:0 }; cards.forEach(c => p[c.status]++); return p;
+}
+
+/* ============ view routing ============ */
+function showView(name) {
+  currentView = name;
+  document.querySelectorAll('.view').forEach(v => v.classList.toggle('active', v.id === 'view-' + name));
+  document.querySelectorAll('.navbtn').forEach(b => b.classList.toggle('active', b.dataset.view === name));
+  renderCurrent();
+  window.scrollTo(0, 0);
+}
+function renderCurrent() {
+  updateKeyPill();
+  if (currentView === 'home') renderHome();
+  else if (currentView === 'bank') renderBank();
+  else if (currentView === 'revise') { if (!session) renderReviseSetup(); }
+  else if (currentView === 'settings') renderSettings();
+  $('nav-revise').disabled = bank.cards.length === 0;
+}
+document.querySelectorAll('[data-view]').forEach(el => el.addEventListener('click', () => showView(el.dataset.view)));
+
+/* ============ key pill / banner ============ */
+function updateKeyPill() {
+  const pill = $('keypill'), has = !!getKey();
+  pill.textContent = has ? '🔑 key set' : '🔑 no key';
+  pill.className = 'keypill ' + (has ? 'ok' : 'no');
+}
+
+/* ============ HOME ============ */
+function renderHome() {
+  const banner = $('homeKeyBanner');
+  banner.innerHTML = getKey() ? '' :
+    '<div class="banner">No API key yet. <a id="goSettings">Add one in Settings →</a></div>';
+  const gs = $('goSettings'); if (gs) gs.addEventListener('click', () => showView('settings'));
+
+  const p = pileCounts(bank.cards);
+  $('homeStats').innerHTML = `
+    <div class="tile"><div class="num">${bank.cards.length}</div><div class="lbl">Total cards</div></div>
+    <div class="tile"><div class="num">${categories().length}</div><div class="lbl">Categories</div></div>
+    <div class="tile unsure"><div class="num">${p.unsure}</div><div class="lbl">Unsure</div></div>
+    <div class="tile nearly"><div class="num">${p.nearly}</div><div class="lbl">Nearly</div></div>
+    <div class="tile learned"><div class="num">${p.learned}</div><div class="lbl">Learned</div></div>`;
+
+  $('model').value = getModel();
+}
+
+/* ============ BANK ============ */
+function pileBar(cards) {
+  const p = pileCounts(cards), t = cards.length || 1;
+  return `<span class="pile-bar">
+    <span style="width:${p.unsure/t*100}%;background:var(--unsure)"></span>
+    <span style="width:${p.nearly/t*100}%;background:var(--nearly)"></span>
+    <span style="width:${p.learned/t*100}%;background:var(--learned)"></span></span>`;
+}
+function renderBank() {
+  const list = $('bankList');
+  const total = bank.cards.length;
+  $('bankSummary').textContent = total ? `${total} cards across ${categories().length} categories` : '';
+  if (!total) {
+    list.innerHTML = `<div class="empty"><div class="big">📭</div><p>No cards yet.</p>
+      <div style="margin-top:14px;"><button class="btn primary" data-view="home">Generate your first set</button></div></div>`;
+    list.querySelector('[data-view]').addEventListener('click', () => showView('home'));
+    return;
+  }
+  let cats = categories().map(name => ({ name, cards: catCards(name) }));
+  const sort = $('sort').value;
+  if (sort === 'alpha') cats.sort((a,b) => a.name.localeCompare(b.name));
+  else if (sort === 'count') cats.sort((a,b) => b.cards.length - a.cards.length);
+  else if (sort === 'recent') cats.sort((a,b) => Math.max(...b.cards.map(c=>c.created)) - Math.max(...a.cards.map(c=>c.created)));
+
+  const openSet = new Set([...list.querySelectorAll('.cat.open')].map(e => e.dataset.cat));
+
+  list.innerHTML = cats.map(cat => {
+    // group by topic within category
+    const topics = [];
+    cat.cards.forEach(c => { let t = topics.find(x => x.topic === c.topic); if (!t) { t = { topic: c.topic, cards: [] }; topics.push(t); } t.cards.push(c); });
+    const inner = topics.map(t => `
+      <div class="topic-head">${esc(t.topic)} · ${t.cards.length}
+        <button class="btn ghost sm" style="float:right; margin-top:-4px;" data-add-topic="${esc(cat.name)}" data-topic="${esc(t.topic)}">＋ Add</button>
+      </div>
+      ${t.cards.map(c => cardRow(c)).join('')}`).join('');
+    return `<div class="cat ${openSet.has(cat.name)?'open':''}" data-cat="${esc(cat.name)}">
+      <div class="cat-head" data-toggle>
+        <span class="chev">▶</span>
+        <span class="cat-name">${esc(cat.name)}</span>
+        <span class="cat-spacer">
+          ${pileBar(cat.cards)}
+          <span class="cat-meta">${cat.cards.length}</span>
+          <button class="btn ghost sm" data-add-cat="${esc(cat.name)}">＋ Add cards</button>
+        </span>
+      </div>
+      <div class="cat-body">${inner}</div>
+    </div>`;
+  }).join('');
+}
+function cardRow(c) {
+  const seg = Object.keys(PILES).map(k =>
+    `<button data-status="${k}" data-id="${c.id}" class="${c.status===k?'on':''}">${PILES[k].label.split(' ')[0]}</button>`).join('');
+  return `<div class="qcard" data-card="${c.id}">
+    <div class="q" data-reveal>${esc(c.front)}</div>
+    <div class="a">${esc(c.back)}</div>
+    <div class="foot"><span class="seg">${seg}</span>
+      <button class="del" data-del="${c.id}">delete</button></div>
+  </div>`;
+}
+// bank interactions (delegation)
+$('bankList').addEventListener('click', e => {
+  const toggle = e.target.closest('[data-toggle]');
+  if (toggle) { toggle.closest('.cat').classList.toggle('open'); return; }
+  const reveal = e.target.closest('[data-reveal]');
+  if (reveal) { reveal.closest('.qcard').classList.toggle('open'); return; }
+  const seg = e.target.closest('.seg button');
+  if (seg) { const c = cardById(seg.dataset.id); if (c) { c.status = seg.dataset.status; saveBank(); renderBank(); } return; }
+  const del = e.target.closest('[data-del]');
+  if (del) { bank.cards = bank.cards.filter(c => c.id !== del.dataset.del); saveBank(); renderBank(); return; }
+  const addCat = e.target.closest('[data-add-cat]');
+  if (addCat) { openAdd(addCat.dataset.addCat, addCat.dataset.addCat); return; }
+  const addTopic = e.target.closest('[data-add-topic]');
+  if (addTopic) { openAdd(addTopic.dataset.addTopic, addTopic.dataset.topic); return; }
+});
+$('sort').addEventListener('change', renderBank);
+
+/* ============ ADD modal ============ */
+function openAdd(category, topic) {
+  addCtx = { category };
+  $('addTitle').textContent = 'Add cards to “' + category + '”';
+  $('addTopic').value = topic || category;
+  $('addCount').value = '5';
+  $('addOverlay').classList.add('show');
+  setTimeout(() => $('addTopic').focus(), 50);
+}
+$('addCancel').addEventListener('click', () => $('addOverlay').classList.remove('show'));
+$('addOverlay').addEventListener('click', e => { if (e.target === $('addOverlay')) $('addOverlay').classList.remove('show'); });
+$('addGo').addEventListener('click', () => {
+  const topic = $('addTopic').value.trim(), count = $('addCount').value, cat = addCtx.category;
+  $('addOverlay').classList.remove('show');
+  generateCards({ topic, count, forcedCategory: cat });
+});
+
+/* ============ generation ============ */
+const SYS = 'You are a study-aid generator. Create clear, accurate flashcards with a concise question on the '
+  + 'front and a complete but focused answer on the back. Vary the angle across cards (definitions, causes, '
+  + 'examples, comparisons, significance) so they cover the topic well. Also assign a "category": a broad '
+  + 'subject area the topic belongs to (e.g. topic "Robert Nozick" -> category "Libertarianism"). Reuse an '
+  + 'existing category name exactly when the topic fits one. Never duplicate or closely paraphrase questions '
+  + 'the user says already exist.';
+
+async function generateCards({ topic, count, forcedCategory }) {
+  const key = getKey();
+  if (!key) { toast('Add your Anthropic API key in Settings first.', 'error'); showView('settings'); return; }
+  topic = (topic || '').trim();
+  if (!topic) { toast('Enter a topic.', 'error'); return; }
+  count = Math.max(1, Math.min(20, parseInt(count) || 5));
+  const model = getModel();
+  const cats = categories();
+
+  let existingFronts = (forcedCategory
+    ? catCards(forcedCategory)
+    : bank.cards.filter(c => c.topic.toLowerCase() === topic.toLowerCase())
+  ).map(c => c.front).slice(0, 60);
+
+  const schema = { type:'object', additionalProperties:false, required:['category','flashcards'], properties:{
+    category:{ type:'string' },
+    flashcards:{ type:'array', items:{ type:'object', additionalProperties:false, required:['front','back'],
+      properties:{ front:{type:'string'}, back:{type:'string'} } } }
+  }};
+
+  let user = `Generate exactly ${count} flashcards about: ${topic}\n\n`;
+  if (forcedCategory) user += `These belong to the existing category "${forcedCategory}". Set "category" to exactly "${forcedCategory}".\n\n`;
+  else if (cats.length) user += `Existing categories: ${cats.join(', ')}.\nIf this topic clearly fits one of them, set "category" to that exact name. Otherwise create a concise new broad category name.\n\n`;
+  else user += `Set "category" to a concise broad subject area this topic belongs to.\n\n`;
+  if (existingFronts.length) user += `Do NOT duplicate or closely paraphrase these existing questions:\n- ${existingFronts.join('\n- ')}\n`;
+
+  setLoading(true, `Forging ${count} card${count>1?'s':''}…`);
+  try {
+    const res = await fetch('https://api.anthropic.com/v1/messages', {
+      method:'POST',
+      headers:{ 'content-type':'application/json', 'x-api-key':key,
+        'anthropic-version':'2023-06-01', 'anthropic-dangerous-direct-browser-access':'true' },
+      body: JSON.stringify({ model, max_tokens: 3200, system: SYS,
+        messages:[{ role:'user', content:user }], output_config:{ format:{ type:'json_schema', schema } } })
+    });
+    const data = await res.json();
+    if (!res.ok) throw new Error((data.error && data.error.message) || ('HTTP ' + res.status));
+    if (data.stop_reason === 'refusal') throw new Error('The model declined this topic. Try another.');
+    const tb = (data.content || []).find(b => b.type === 'text');
+    if (!tb) throw new Error('No content returned.');
+    const parsed = JSON.parse(tb.text);
+
+    let category = forcedCategory || (parsed.category || 'General').trim();
+    if (!forcedCategory) { const m = cats.find(c => c.toLowerCase() === category.toLowerCase()); if (m) category = m; }
+
+    const produced = (parsed.flashcards || []).filter(c => c.front && c.back);
+    if (!produced.length) throw new Error('No cards were produced.');
+
+    const existSet = new Set(catCards(category).map(c => c.front.trim().toLowerCase()));
+    let added = 0, dupes = 0;
+    produced.forEach(c => {
+      const k = c.front.trim().toLowerCase();
+      if (existSet.has(k)) { dupes++; return; }
+      existSet.add(k);
+      bank.cards.push({ id: uid(), front: c.front.trim(), back: c.back.trim(),
+        topic, category, status: 'unsure', created: Date.now() });
+      added++;
+    });
+    saveBank();
+    toast(`Added ${added} card${added!==1?'s':''} to “${category}”` + (dupes ? ` (${dupes} duplicate${dupes>1?'s':''} skipped)` : '') + '.', 'success');
+    renderCurrent();
+  } catch (err) { toast('⚠️ ' + err.message, 'error'); }
+  finally { setLoading(false); }
+}
+
+/* ============ REVISE ============ */
+function renderReviseSetup() {
+  $('reviseSetup').style.display = ''; $('quizArea').style.display = 'none'; $('quizDone').style.display = 'none';
+
+  // Build the scope lookup: All → each category (whole) → its topics (subcategories).
+  scopeOptions = [{ label: 'All cards', cards: bank.cards.slice() }];
+  categories().forEach(cat => {
+    const cc = catCards(cat);
+    scopeOptions.push({ label: cat, cards: cc, group: cat, whole: true });
+    const topics = [];
+    cc.forEach(c => { if (!topics.includes(c.topic)) topics.push(c.topic); });
+    if (topics.length > 1) // only surface topics when a category has more than one
+      topics.forEach(tp => scopeOptions.push({ label: tp, cards: cc.filter(c => c.topic === tp), group: cat }));
+  });
+
+  let html = `<option value="0">All cards (${bank.cards.length})</option>`;
+  let group = null;
+  scopeOptions.forEach((o, i) => {
+    if (i === 0) return;
+    if (o.group !== group) { if (group !== null) html += '</optgroup>'; html += `<optgroup label="${esc(o.group)}">`; group = o.group; }
+    const text = o.whole ? 'Whole category' : '↳ ' + o.label;
+    html += `<option value="${i}">${esc(text)} (${o.cards.length})</option>`;
+  });
+  if (group !== null) html += '</optgroup>';
+  $('scope').innerHTML = html;
+  updateScopeInfo();
+}
+$('scope').addEventListener('change', updateScopeInfo);
+function scopeCards() { return (scopeOptions[parseInt($('scope').value)] || scopeOptions[0]).cards; }
+function updateScopeInfo() {
+  const cards = scopeCards();
+  const p = pileCounts(cards);
+  $('scopeInfo').innerHTML = `${cards.length} cards — <b style="color:var(--unsure)">${p.unsure} unsure</b>, `
+    + `<b style="color:var(--nearly)">${p.nearly} nearly</b>, <b style="color:var(--learned)">${p.learned} learned</b>.`;
+}
+function buildDeck(cards) {
+  const pool = [];
+  cards.forEach(c => { for (let i = 0; i < PILES[c.status].weight; i++) pool.push(c.id); });
+  for (let i = pool.length - 1; i > 0; i--) { const j = Math.floor(Math.random() * (i + 1)); [pool[i], pool[j]] = [pool[j], pool[i]]; }
+  for (let i = 1; i < pool.length; i++) if (pool[i] === pool[i-1]) {
+    for (let j = i + 1; j < pool.length; j++) if (pool[j] !== pool[i-1]) { [pool[i], pool[j]] = [pool[j], pool[i]]; break; }
+  }
+  return pool;
+}
+$('startBtn').addEventListener('click', () => {
+  const cards = scopeCards().slice();
+  if (!cards.length) { toast('No cards to revise here.', 'error'); return; }
+  session = { deck: buildDeck(cards), pos: 0, graded: 0, counts: { unsure:0, nearly:0, learned:0 } };
+  $('reviseSetup').style.display = 'none'; $('quizDone').style.display = 'none'; $('quizArea').style.display = '';
+  showQuizCard();
+});
+function showQuizCard() {
+  if (session.pos >= session.deck.length) return finishSession();
+  const c = cardById(session.deck[session.pos]);
+  if (!c) { session.pos++; return showQuizCard(); }
+  $('quizCard').classList.remove('flipped');
+  $('gradeRow').style.display = 'none';
+  $('revealHint').style.display = '';
+  $('quizCat').textContent = c.category;
+  $('quizFront').textContent = c.front;
+  $('quizBack').textContent = c.back;
+  $('quizProgress').textContent = `Card ${session.pos + 1} of ${session.deck.length}`;
+}
+function flipQuiz() {
+  const card = $('quizCard'); card.classList.add('flipped');
+  $('gradeRow').style.display = 'flex'; $('revealHint').style.display = 'none';
+}
+$('quizCard').addEventListener('click', () => { if (!$('quizCard').classList.contains('flipped')) flipQuiz(); });
+$('gradeRow').addEventListener('click', e => {
+  const b = e.target.closest('button[data-g]'); if (!b) return;
+  const c = cardById(session.deck[session.pos]);
+  if (c) { c.status = b.dataset.g; saveBank(); }
+  session.counts[b.dataset.g]++; session.graded++; session.pos++;
+  showQuizCard();
+});
+$('endBtn').addEventListener('click', finishSession);
+$('againBtn').addEventListener('click', () => { session = null; renderReviseSetup(); });
+function finishSession() {
+  const c = session.counts;
+  $('quizArea').style.display = 'none'; $('quizDone').style.display = 'block';
+  $('doneSummary').innerHTML = `Graded ${session.graded} card${session.graded!==1?'s':''} — `
+    + `<b style="color:var(--unsure)">${c.unsure} unsure</b>, `
+    + `<b style="color:var(--nearly)">${c.nearly} nearly</b>, `
+    + `<b style="color:var(--learned)">${c.learned} learned</b>.`;
+  session = null;
+}
+
+/* ============ SETTINGS ============ */
+function renderSettings() {
+  $('apiKey').value = getKey();
+  $('apiKey').type = 'password'; $('revealKey').textContent = 'Show';
+  $('defModel').value = getModel();
+}
+$('saveKey').addEventListener('click', () => {
+  localStorage.setItem(LS_KEY, $('apiKey').value.trim());
+  updateKeyPill(); toast('API key saved.', 'success');
+});
+$('revealKey').addEventListener('click', () => {
+  const f = $('apiKey'); const show = f.type === 'password';
+  f.type = show ? 'text' : 'password'; $('revealKey').textContent = show ? 'Hide' : 'Show';
+});
+$('defModel').addEventListener('change', () => { localStorage.setItem(LS_MODEL, $('defModel').value); $('model').value = getModel(); });
+$('exportBtn').addEventListener('click', () => {
+  const blob = new Blob([JSON.stringify(bank, null, 2)], { type: 'application/json' });
+  const a = document.createElement('a'); a.href = URL.createObjectURL(blob);
+  a.download = 'flashcard-bank.json'; a.click(); URL.revokeObjectURL(a.href);
+});
+$('importBtn').addEventListener('click', () => $('importFile').click());
+$('importFile').addEventListener('change', e => {
+  const f = e.target.files[0]; if (!f) return;
+  const r = new FileReader();
+  r.onload = () => { try {
+    const data = JSON.parse(r.result);
+    if (!data || !Array.isArray(data.cards)) throw new Error('bad file');
+    data.cards.forEach(c => { if (!bank.cards.some(x => x.id === c.id)) bank.cards.push(c); });
+    saveBank(); toast('Imported ' + data.cards.length + ' cards.', 'success'); renderCurrent();
+  } catch { toast('Could not read that file.', 'error'); } };
+  r.readAsText(f); e.target.value = '';
+});
+$('clearBtn').addEventListener('click', () => {
+  if (confirm('Delete ALL cards? This cannot be undone.')) { bank = { cards: [] }; saveBank(); toast('All cards cleared.', 'success'); renderCurrent(); }
+});
+
+/* ============ generate buttons (home) ============ */
+$('genBtn').addEventListener('click', () => generateCards({ topic: $('topic').value, count: $('count').value }));
+$('topic').addEventListener('keydown', e => { if (e.key === 'Enter') generateCards({ topic: $('topic').value, count: $('count').value }); });
+$('model').addEventListener('change', () => localStorage.setItem(LS_MODEL, $('model').value));
+
+/* ============ loading + toast ============ */
+function setLoading(on, text) { $('loadText').textContent = text || 'Working…'; $('loading').classList.toggle('show', on); }
+let toastTimer;
+function toast(msg, type) {
+  $('toastBox').textContent = msg; $('toastBox').className = 'toastbox ' + (type || '');
+  $('toast').classList.add('show'); clearTimeout(toastTimer);
+  toastTimer = setTimeout(() => $('toast').classList.remove('show'), type === 'error' ? 6000 : 3500);
+}
+
+/* ============ keyboard (quiz) ============ */
+document.addEventListener('keydown', e => {
+  if (currentView !== 'revise' || $('quizArea').style.display === 'none') return;
+  if (['INPUT','SELECT','TEXTAREA'].includes(document.activeElement.tagName)) return;
+  if (e.key === ' ') { e.preventDefault(); if (!$('quizCard').classList.contains('flipped')) flipQuiz(); }
+  else if ($('quizCard').classList.contains('flipped')) {
+    if (e.key === '1') $('gradeRow').querySelector('[data-g="unsure"]').click();
+    else if (e.key === '2') $('gradeRow').querySelector('[data-g="nearly"]').click();
+    else if (e.key === '3') $('gradeRow').querySelector('[data-g="learned"]').click();
+  }
+});
+
+/* ============ boot ============ */
+showView('home');
+</script>
+</body>
+</html>
