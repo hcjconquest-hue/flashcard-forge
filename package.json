@@ -1,0 +1,13 @@
+{
+  "name": "flashcard-forge",
+  "version": "1.0.0",
+  "description": "Single-file flashcard app with Claude-generated cards and optional synced card bank.",
+  "type": "commonjs",
+  "private": true,
+  "engines": {
+    "node": ">=18"
+  },
+  "dependencies": {
+    "@upstash/redis": "^1.34.3"
+  }
+}

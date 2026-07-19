@@ -327,7 +327,7 @@
   <!-- ===================== SETTINGS ===================== -->
   <section class="view" id="view-settings">
     <h2>Settings</h2>
-    <div class="panel section-gap">
+    <div class="panel section-gap" id="keyPanel">
       <label for="apiKey">Anthropic API key</label>
       <div class="row">
         <div class="field"><input id="apiKey" type="password" placeholder="sk-ant-…" autocomplete="off"></div>
@@ -378,12 +378,28 @@
   </div>
 </div>
 
+<!-- Site password gate. Backend mode only; deliberately not dismissible. -->
+<div class="overlay" id="loginOverlay" style="z-index:45;">
+  <div class="modal">
+    <h3>Flashcard <em style="color:var(--accent); font-style:italic;">Forge</em></h3>
+    <p class="tagline" style="margin:-8px 0 14px; font-size:13px;">Enter the site password to load your synced bank.</p>
+    <div class="row"><div class="field">
+      <label for="sitePass">Password</label>
+      <input id="sitePass" type="password" autocomplete="current-password" placeholder="••••••••">
+    </div></div>
+    <div id="loginErr" class="tagline" style="color:#ffcbb8; min-height:18px; font-size:13px;"></div>
+    <div class="row" style="justify-content:flex-end; margin-top:6px;">
+      <button class="btn primary" id="loginGo">Sign in</button>
+    </div>
+  </div>
+</div>
+
 <div id="loading"><div class="loadbox"><div class="spinner"></div><span id="loadText">Working…</span></div></div>
 <div id="toast"><div class="toastbox" id="toastBox"></div></div>
 
 <script>
 /* ============ storage & state ============ */
-const LS_BANK = 'ff_bank_v1', LS_KEY = 'ff_key', LS_MODEL = 'ff_model';
+const LS_BANK = 'ff_bank_v1', LS_KEY = 'ff_key', LS_MODEL = 'ff_model', LS_SYNCED = 'ff_synced_at';
 const $ = id => document.getElementById(id);
 const PILES = {
   unsure:  { label:'Unsure',       weight:3, color:'var(--unsure)' },
@@ -396,8 +412,191 @@ let addCtx = null; // { category }
 let session = null;
 let scopeOptions = []; // revision scope lookup: [{ label, cards, group, whole }]
 
-function loadBank() { try { return JSON.parse(localStorage.getItem(LS_BANK)) || { cards: [] }; } catch { return { cards: [] }; } }
-function saveBank() { localStorage.setItem(LS_BANK, JSON.stringify(bank)); }
+/* ============ sync layer ============
+   Served from Vercel there is a backend (/api/*) and the bank is shared across
+   devices. Served from GitHub Pages there is not, and everything below falls
+   back to the original browser-only behaviour. Writes are always local-first,
+   so a network failure never loses cards. */
+const SYNC = {
+  backend: false, authed: false, ready: false, state: 'local',
+  remoteUpdatedAt: 0, lastGet: 0, lastCount: null,
+  timer: null, maxTimer: null, retryTimer: null,
+  inflight: false, dirty: false, retries: 0,
+};
+
+function readLocalBank() { try { return JSON.parse(localStorage.getItem(LS_BANK)) || { cards: [] }; } catch { return { cards: [] }; } }
+function writeLocal() { try { localStorage.setItem(LS_BANK, JSON.stringify(bank)); } catch {} }
+
+/* Normalise any bank (local or remote) so bad data can't poison the renderers:
+   pileCounts() NaNs on an unknown status, and the 'recent' sort NaNs without `created`. */
+function sanitizeBank(b) {
+  const cards = (b && Array.isArray(b.cards) ? b.cards : [])
+    .filter(c => c && c.front && c.back)
+    .map(c => ({
+      id: c.id || uid(),
+      front: String(c.front), back: String(c.back),
+      topic: c.topic || 'General', category: c.category || 'General',
+      status: PILES[c.status] ? c.status : 'unsure',
+      created: Number(c.created) || Date.now(),
+    }));
+  return { cards, updatedAt: Number(b && b.updatedAt) || 0 };
+}
+
+function loadBank() { return sanitizeBank(readLocalBank()); }
+
+function saveBank() {
+  bank.updatedAt = Date.now();
+  writeLocal();                              // local-first, always
+  if (!SYNC.backend || !SYNC.ready) return;  // GH Pages, or before first GET -> never PUT
+  const structural = SYNC.lastCount === null || bank.cards.length !== SYNC.lastCount;
+  scheduleFlush(structural ? 0 : 1500);      // generate/import/delete now; quiz grades coalesced
+}
+
+const SYNC_PILL = {
+  synced:    ['☁ synced',      'ok'],
+  saving:    ['☁ saving…',     ''],
+  pending:   ['☁ saving…',     ''],
+  error:     ['⚠ offline',     'no'],
+  signedout: ['🔒 signed out', 'no'],
+};
+function setSyncState(s) {
+  SYNC.state = s;
+  const pill = $('keypill'); if (!pill) return;
+  if (!SYNC.backend) return updateKeyPill();
+  const [text, cls] = SYNC_PILL[s] || SYNC_PILL.synced;
+  pill.textContent = text;
+  pill.className = 'keypill ' + cls;
+  pill.title = s === 'error' ? 'Saved in this browser — will sync when you reconnect.' : '';
+}
+
+function scheduleFlush(delay) {
+  SYNC.dirty = true;
+  setSyncState('pending');
+  clearTimeout(SYNC.timer);
+  SYNC.timer = setTimeout(() => flushBank(), delay);
+  if (!SYNC.maxTimer) SYNC.maxTimer = setTimeout(() => { SYNC.maxTimer = null; flushBank(); }, 8000);
+}
+
+async function flushBank(opts) {
+  opts = opts || {};
+  clearTimeout(SYNC.timer); SYNC.timer = null;
+  clearTimeout(SYNC.maxTimer); SYNC.maxTimer = null;
+  clearTimeout(SYNC.retryTimer); SYNC.retryTimer = null;
+  // `authed` gates the retry loop: without it a 401 would reschedule forever.
+  if (!SYNC.backend || !SYNC.ready || !SYNC.authed || !SYNC.dirty || SYNC.inflight) return;
+
+  SYNC.inflight = true;
+  SYNC.dirty = false;                        // a saveBank() mid-flight re-sets this
+  const payload = JSON.stringify({ cards: bank.cards });
+  const count = bank.cards.length;
+  setSyncState('saving');
+  try {
+    const res = await fetch('/api/bank', {
+      method: 'PUT', credentials: 'same-origin',
+      headers: { 'content-type': 'application/json' },
+      body: payload,
+      keepalive: !!opts.keepalive && payload.length < 60000,  // keepalive bodies cap ~64KB
+    });
+    if (res.status === 401) { SYNC.dirty = true; SYNC.authed = false; setSyncState('signedout'); showLogin(); return; }
+    if (!res.ok) throw new Error('HTTP ' + res.status);
+    const data = await res.json();
+    SYNC.remoteUpdatedAt = Number(data.updatedAt) || Date.now();
+    SYNC.lastCount = count;
+    SYNC.retries = 0;
+    localStorage.setItem(LS_SYNCED, String(SYNC.remoteUpdatedAt));
+    setSyncState(SYNC.dirty ? 'pending' : 'synced');
+  } catch {
+    SYNC.dirty = true;
+    setSyncState('error');
+    const wait = Math.min(60000, 2000 * Math.pow(2, SYNC.retries++));
+    SYNC.retryTimer = setTimeout(() => flushBank(), wait);
+  } finally {
+    SYNC.inflight = false;
+    if (SYNC.dirty && !SYNC.retryTimer && SYNC.authed) scheduleFlush(400);
+  }
+}
+
+function mergeBanks(base, over) {            // union by id; `over` wins on collision
+  const byId = new Map(base.cards.map(c => [c.id, c]));
+  over.cards.forEach(c => byId.set(c.id, c));
+  return { cards: [...byId.values()], updatedAt: Date.now() };
+}
+
+/* First load: pull the remote bank and decide what to adopt. Only after this
+   succeeds does SYNC.ready go true, which is what stops a stale/empty local
+   bank from PUTting over good remote data. */
+async function hydrateFromRemote() {
+  const res = await fetch('/api/bank', { credentials: 'same-origin', cache: 'no-store' });
+  if (res.status === 401) { SYNC.authed = false; return false; }
+  if (!res.ok) throw new Error('HTTP ' + res.status);
+  SYNC.lastGet = Date.now();
+
+  const remote = sanitizeBank(await res.json());
+  const local = sanitizeBank(readLocalBank());
+  const confirmed = parseInt(localStorage.getItem(LS_SYNCED) || '0', 10);
+  const unpushed = local.cards.length > 0 && local.updatedAt > confirmed;
+
+  let adopt = remote, push = false;
+  if (unpushed) {
+    if (!remote.cards.length) { adopt = local; push = true; }
+    else if (local.updatedAt > remote.updatedAt) { adopt = mergeBanks(remote, local); push = true; }
+  }
+
+  if (adopt !== local && local.cards.length) {
+    try { localStorage.setItem('ff_bank_backup_' + Date.now(), JSON.stringify(local)); } catch {}
+  }
+
+  bank = adopt;
+  SYNC.remoteUpdatedAt = remote.updatedAt;
+  SYNC.lastCount = remote.cards.length;
+  SYNC.ready = true;                         // writes unlock only here
+
+  if (push) { SYNC.dirty = true; flushBank(); }
+  else { writeLocal(); localStorage.setItem(LS_SYNCED, String(remote.updatedAt)); setSyncState('synced'); }
+  return true;
+}
+
+async function refreshFromRemote() {         // pick up another device's changes on tab focus
+  try {
+    const res = await fetch('/api/bank', { credentials: 'same-origin', cache: 'no-store' });
+    if (!res.ok) return;
+    SYNC.lastGet = Date.now();
+    const remote = sanitizeBank(await res.json());
+    if (remote.updatedAt > SYNC.remoteUpdatedAt && !SYNC.dirty) {
+      bank = remote;
+      SYNC.remoteUpdatedAt = remote.updatedAt;
+      SYNC.lastCount = remote.cards.length;
+      writeLocal(); localStorage.setItem(LS_SYNCED, String(remote.updatedAt));
+      renderCurrent();
+      toast('Bank updated from another device.', 'success');
+    }
+  } catch {}
+}
+
+document.addEventListener('visibilitychange', () => {
+  if (document.visibilityState === 'hidden') { if (SYNC.dirty) flushBank({ keepalive: true }); return; }
+  // Don't swap the deck out from under a running quiz.
+  if (SYNC.backend && SYNC.ready && !SYNC.dirty && !session && Date.now() - SYNC.lastGet > 30000) refreshFromRemote();
+});
+window.addEventListener('pagehide', () => { if (SYNC.dirty) flushBank({ keepalive: true }); });
+window.addEventListener('online', () => { if (SYNC.dirty) { SYNC.retries = 0; flushBank(); } });
+window.addEventListener('beforeunload', e => {
+  if (SYNC.backend && SYNC.dirty && SYNC.state === 'error') { e.preventDefault(); e.returnValue = ''; }
+});
+
+async function probeBackend() {
+  if (location.protocol === 'file:') return null;
+  try {
+    const ctl = new AbortController();
+    const t = setTimeout(() => ctl.abort(), 4000);
+    const res = await fetch('/api/health', { credentials: 'same-origin', cache: 'no-store', signal: ctl.signal });
+    clearTimeout(t);
+    if (!(res.headers.get('content-type') || '').includes('application/json')) return null;
+    const data = await res.json();
+    if (!data || data.app !== 'flashcard-forge') return null;
+    return data;
+  } catch { return null; }
+}
 function getKey() { return (localStorage.getItem(LS_KEY) || '').trim(); }
 function getModel() { return localStorage.getItem(LS_MODEL) || 'claude-opus-4-8'; }
 function uid() { return 'c' + Date.now().toString(36) + Math.random().toString(36).slice(2, 7); }
@@ -431,7 +630,9 @@ document.querySelectorAll('[data-view]').forEach(el => el.addEventListener('clic
 
 /* ============ key pill / banner ============ */
 function updateKeyPill() {
-  const pill = $('keypill'), has = !!getKey();
+  const pill = $('keypill');
+  if (SYNC.backend) { setSyncState(SYNC.state); return; }
+  const has = !!getKey();
   pill.textContent = has ? '🔑 key set' : '🔑 no key';
   pill.className = 'keypill ' + (has ? 'ok' : 'no');
 }
@@ -439,7 +640,7 @@ function updateKeyPill() {
 /* ============ HOME ============ */
 function renderHome() {
   const banner = $('homeKeyBanner');
-  banner.innerHTML = getKey() ? '' :
+  banner.innerHTML = (SYNC.backend || getKey()) ? '' :
     '<div class="banner">No API key yet. <a id="goSettings">Add one in Settings →</a></div>';
   const gs = $('goSettings'); if (gs) gs.addEventListener('click', () => showView('settings'));
 
@@ -555,9 +756,39 @@ const SYS = 'You are a study-aid generator. Create clear, accurate flashcards wi
   + 'existing category name exactly when the topic fits one. Never duplicate or closely paraphrase questions '
   + 'the user says already exist.';
 
+/* Backend mode goes through /api/generate (key lives server-side); GitHub Pages
+   mode keeps calling Anthropic directly with the browser's own key. Both return
+   the same { category, flashcards } shape. */
+async function requestCards({ topic, count, forcedCategory, model, cats, existingFronts, schema, user }) {
+  if (SYNC.backend) {
+    const res = await fetch('/api/generate', {
+      method:'POST', credentials:'same-origin',
+      headers:{ 'content-type':'application/json' },
+      body: JSON.stringify({ topic, count, forcedCategory: forcedCategory || null, existingFronts, categories: cats, model })
+    });
+    const data = await res.json().catch(() => ({}));
+    if (res.status === 401) { SYNC.authed = false; showLogin(); throw new Error('Session expired — sign in again.'); }
+    if (!res.ok) throw new Error(data.error || ('HTTP ' + res.status));
+    return { category: data.category, flashcards: data.flashcards || [] };
+  }
+  const res = await fetch('https://api.anthropic.com/v1/messages', {
+    method:'POST',
+    headers:{ 'content-type':'application/json', 'x-api-key':getKey(),
+      'anthropic-version':'2023-06-01', 'anthropic-dangerous-direct-browser-access':'true' },
+    body: JSON.stringify({ model, max_tokens: 3200, system: SYS,
+      messages:[{ role:'user', content:user }], output_config:{ format:{ type:'json_schema', schema } } })
+  });
+  const data = await res.json();
+  if (!res.ok) throw new Error((data.error && data.error.message) || ('HTTP ' + res.status));
+  if (data.stop_reason === 'refusal') throw new Error('The model declined this topic. Try another.');
+  const tb = (data.content || []).find(b => b.type === 'text');
+  if (!tb) throw new Error('No content returned.');
+  return JSON.parse(tb.text);
+}
+
 async function generateCards({ topic, count, forcedCategory }) {
-  const key = getKey();
-  if (!key) { toast('Add your Anthropic API key in Settings first.', 'error'); showView('settings'); return; }
+  const key = SYNC.backend ? null : getKey();
+  if (!SYNC.backend && !key) { toast('Add your Anthropic API key in Settings first.', 'error'); showView('settings'); return; }
   topic = (topic || '').trim();
   if (!topic) { toast('Enter a topic.', 'error'); return; }
   count = Math.max(1, Math.min(20, parseInt(count) || 5));
@@ -583,19 +814,7 @@ async function generateCards({ topic, count, forcedCategory }) {
 
   setLoading(true, `Forging ${count} card${count>1?'s':''}…`);
   try {
-    const res = await fetch('https://api.anthropic.com/v1/messages', {
-      method:'POST',
-      headers:{ 'content-type':'application/json', 'x-api-key':key,
-        'anthropic-version':'2023-06-01', 'anthropic-dangerous-direct-browser-access':'true' },
-      body: JSON.stringify({ model, max_tokens: 3200, system: SYS,
-        messages:[{ role:'user', content:user }], output_config:{ format:{ type:'json_schema', schema } } })
-    });
-    const data = await res.json();
-    if (!res.ok) throw new Error((data.error && data.error.message) || ('HTTP ' + res.status));
-    if (data.stop_reason === 'refusal') throw new Error('The model declined this topic. Try another.');
-    const tb = (data.content || []).find(b => b.type === 'text');
-    if (!tb) throw new Error('No content returned.');
-    const parsed = JSON.parse(tb.text);
+    const parsed = await requestCards({ topic, count, forcedCategory, model, cats, existingFronts, schema, user });
 
     let category = forcedCategory || (parsed.category || 'General').trim();
     if (!forcedCategory) { const m = cats.find(c => c.toLowerCase() === category.toLowerCase()); if (m) category = m; }
@@ -769,8 +988,67 @@ document.addEventListener('keydown', e => {
   }
 });
 
+/* ============ login gate ============ */
+function showLogin() {
+  $('loginErr').textContent = '';
+  $('sitePass').value = '';
+  $('loginOverlay').classList.add('show');
+  setTimeout(() => $('sitePass').focus(), 50);
+}
+
+async function doLogin() {
+  const pw = $('sitePass').value;
+  if (!pw) return;
+  $('loginGo').disabled = true;
+  $('loginErr').textContent = '';
+  try {
+    const res = await fetch('/api/login', {
+      method:'POST', credentials:'same-origin',
+      headers:{ 'content-type':'application/json' },
+      body: JSON.stringify({ password: pw })
+    });
+    const data = await res.json().catch(() => ({}));
+    if (!res.ok) throw new Error(data.error || 'Wrong password.');
+    SYNC.authed = true;
+    $('loginOverlay').classList.remove('show');
+    $('sitePass').value = '';
+    setLoading(true, 'Syncing your cards…');
+    try { await hydrateFromRemote(); } finally { setLoading(false); }
+    if (SYNC.dirty) flushBank();      // resume a PUT that 401'd mid-session
+    renderCurrent();
+  } catch (e) {
+    $('loginErr').textContent = e.message;
+    $('sitePass').select();
+  } finally {
+    $('loginGo').disabled = false;
+  }
+}
+$('loginGo').addEventListener('click', doLogin);
+$('sitePass').addEventListener('keydown', e => { if (e.key === 'Enter') doLogin(); });
+
 /* ============ boot ============ */
-showView('home');
+async function boot() {
+  const health = await probeBackend();
+  if (health && health.configured !== false) {
+    SYNC.backend = true;
+    $('keyPanel').style.display = 'none';   // key is server-side now
+    if (health.authed) {
+      SYNC.authed = true;
+      setLoading(true, 'Syncing your cards…');
+      try { await hydrateFromRemote(); }
+      catch { setSyncState('error'); toast('Could not reach the server — using this browser’s copy.', 'error'); }
+      finally { setLoading(false); }
+      if (!SYNC.authed) showLogin();
+    } else {
+      setSyncState('signedout');
+      showLogin();
+    }
+  } else if (health) {
+    toast('Server not configured yet — using this browser only.', 'error');
+  }
+  showView('home');
+}
+boot();
 </script>
 </body>
 </html>
